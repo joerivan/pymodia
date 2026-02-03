@@ -1,6 +1,7 @@
-from typing import Any
+from typing import Any, Iterable, List
 from .molecule import MoDiaMolecule
 from .fragment import MoDiaFragment
+
 
 class MoDiaData():
     """
@@ -29,9 +30,6 @@ class MoDiaData():
             Optional keyword arguments used to customize internal behavior
             or override default settings.
         """
-        ...
-
-
         allowed_data = {'name', 'moe', 'orbc'}
         self.__dict__.update((k, v) for k, v in kwargs.items()
                              if k in allowed_data)
@@ -46,57 +44,65 @@ class MoDiaData():
         # MOs are being plotted, but will conserve the energies. This allows
         # the user to make small adjustment to the energy levels to avoid
         # any form of overlapping.
-        self.moe_labels = [float(e) for e in self.molecule.state_energies]
+        self.moe_labels: List[float] = [
+            float(e) for e in self.molecule.state_energies
+        ]
 
-    def set_ao_energy(self, atom_index, energies):
+    def set_ao_energy(self, fragment_index: int,
+                      energies: Iterable[float]) -> "MoDiaData":
         """
-        Set the atomic orbital energies of atom 1 or atom 2
+        Set the atomic orbital energies of fragment 1 or fragment 2.
 
         Parameters
         ----------
-        atom_index : int
-            either 0 or 1 corresponding to setting energies of either atom 1
-            or 2 respectively
-        energies : lst
-            list of two lists with the energies of atoms 1 and 2
+        fragment_index
+            Either 0 or 1 corresponding to setting energies of fragment 1
+            or fragment 2, respectively.
+        energies
+            Iterable containing the fragment-local orbital energies.
 
         """
-        if atom_index == 0:
-            self.atom1.e = energies
-        elif atom_index == 1:
-            self.atom2.e = energies
+        if fragment_index == 0:
+            self.fragment1.state_energies = list(energies)
+        elif fragment_index == 1:
+            self.fragment2.state_energies = list(energies)
         else:
-            raise Exception("atom_index must be either 0 or 1")
+            raise ValueError("fragment_index must be either 0 or 1")
 
         return self
 
-    def set_ao_energies(self, energies):
+    def set_ao_energies(self, energies: Iterable[Iterable[float]]
+                        ) -> "MoDiaData":
         """
-        Set the atomic orbital energies of atom 1 and atom 2
+        Set the atomic orbital energies of fragment 1 and fragment 2.
 
         Parameters
         ----------
-        energies : lst
-            list of two lists with the energies of atoms 1 and 2
+        energies
+            Iterable with two entries containing the energies of
+            fragment 1 and fragment 2.
 
         """
+        energies = list(energies)
+        if len(energies) != 2:
+            raise ValueError("energies must contain two entries")
 
-        self.atom1.e = energies[0]
-        self.atom2.e = energies[1]
+        self.fragment1.state_energies = list(energies[0])
+        self.fragment2.state_energies = list(energies[1])
 
         return self
 
-    def set_moe(self, moe):
+    def set_moe(self, moe: Iterable[float]) -> "MoDiaData":
         """
         Overwrite MO energies. Used to adjust the position of the MO energies
         in the diagram while retaining the actual energy values.
 
         Parameters
         ----------
-        moe : lst
-            List of MO energies
+        moe
+            Iterable of molecular orbital energies.
         """
-        self.molecule.state_energies = moe
+        self.molecule.state_energies = list(moe)
 
         return self
 

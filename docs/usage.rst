@@ -89,6 +89,24 @@ or overridden directly when constructing the diagram:
 
    diagram = MoDia(data, orbc_color="#555555")
 
+Tips for educational diagrams
+-----------------------------
+
+When preparing diagrams for teaching, a few settings are particularly useful:
+
+- ``core_cutoff`` separates core from valence orbitals; adjusting it can make
+  crowded core levels easier to interpret.
+- ``ao_round`` and ``mo_round`` control how aggressively orbital energies are
+  rounded before plotting, which can help avoid near-overlapping levels.
+- ``multiplicity_offset`` introduces a small vertical offset for degenerate
+  levels so multiplicity is visually apparent.
+- ``draw_contributions`` and ``orbc_cutoff`` can be combined to show only the
+  most important fragment–molecule contributions.
+
+Because :class:`MoDiaSettings` only accepts documented keys, prefer updating
+settings through the object or by keyword arguments that match available
+options. If a keyword is not in the allowed list, it will be ignored.
+
 Exporting diagrams
 ------------------
 
