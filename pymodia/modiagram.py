@@ -1,10 +1,9 @@
 import drawsvg as draw
 import numpy as np
-import os
-
-from typing import Any, Optional
+from typing import Any
 from .data import MoDiaData
-from .settings import MoDiaSettings
+from .settings import MoDiaSettings, load_allowed_settings
+
 
 class MoDia:
     """
@@ -45,21 +44,23 @@ class MoDia:
             self.settings = MoDiaSettings()
 
         # changing settings via kwargs
-        allowed_settings_file = open(os.path.join(os.path.dirname(__file__),
-                                                  'allowed_settings.txt'), "r")
-        allowed_settings = allowed_settings_file.read()
-        allowed_settings_file.close()
-
+        allowed_settings = load_allowed_settings()
         self.settings.__dict__.update((k, v) for k, v in kwargs.items()
                                       if k in allowed_settings)
 
         # rounding energies
-        self.data.moe = [round(moe, self.settings.mo_round) for moe
-                         in self.data.molecule.state_energies]
-        self.data.fragment1.e = [round(e, self.settings.ao_round) for e
-                                 in self.data.fragment1.state_energies]
-        self.data.fragment2.e = [round(e, self.settings.ao_round) for e
-                                 in self.data.fragment2.state_energies]
+        self.data.moe = [
+            round(moe, self.settings.mo_round)
+            for moe in self.data.molecule.state_energies
+        ]
+        self._fragment1_energies = [
+            round(e, self.settings.ao_round)
+            for e in self.data.fragment1.state_energies
+        ]
+        self._fragment2_energies = [
+            round(e, self.settings.ao_round)
+            for e in self.data.fragment2.state_energies
+        ]
 
     def draw(self):
         """
@@ -141,26 +142,65 @@ class MoDia:
         """
         Determines the core orbitals based on orbital energy and cutoff
         """
-        moe = self.data.moe
-        ao1 = self.data.fragment1.e
-        ao2 = self.data.fragment2.e
         core_cutoff = self.settings.core_cutoff
 
-        self.__mo_core = [x for x in moe if x <= core_cutoff]
-        self.__mo_outer = [x for x in moe if x > core_cutoff]
+        self.__mo_core, self.__mo_outer = self.__split_by_cutoff(
+            self.data.moe,
+            core_cutoff,
+        )
+        self.__ao1_core, self.__ao1_outer = self.__split_by_cutoff(
+            self._fragment1_energies,
+            core_cutoff,
+        )
+        self.__ao2_core, self.__ao2_outer = self.__split_by_cutoff(
+            self._fragment2_energies,
+            core_cutoff,
+        )
 
-        self.__ao1_core = [x for x in ao1 if x <= core_cutoff]
-        self.__ao1_outer = [x for x in ao1 if x > core_cutoff]
+    def __split_by_cutoff(self, energies, cutoff):
+        """
+        Split energies into core and outer lists using the cutoff.
+        """
+        core = [energy for energy in energies if energy <= cutoff]
+        outer = [energy for energy in energies if energy > cutoff]
+        return core, outer
 
-        self.__ao2_core = [x for x in ao2 if x <= core_cutoff]
-        self.__ao2_outer = [x for x in ao2 if x > core_cutoff]
+    def __core_scaler(self, core_energies):
+        """
+        Build a scaling function for core orbital energies.
+        """
+        core_height = self.settings.core_height
+        emin = min(core_energies)
+        emax = max(core_energies)
+
+        # prevent collapse for nearly-degenerate cores
+        if abs(emax - emin) < 1e-6:
+            emax = emin + 1e-6
+
+        def scale_core(e):
+            return (e - emin) / (emax - emin) * core_height
+
+        return scale_core
+
+    def __outer_reference(self, outer_groups):
+        """
+        Determine the lowest outer energy across all groups.
+        """
+        outer_minima = [min(group) for group in outer_groups]
+        return min(outer_minima)
+
+    def __scale_outer(self, outer_energies, lwst_outer):
+        """
+        Scale outer orbital energies to diagram height.
+        """
+        outer_height = self.settings.outer_height
+        reordered = [energy + abs(lwst_outer) for energy in outer_energies]
+        return [energy / max(reordered) * outer_height for energy in reordered]
 
     def __find_locations(self):
         """
         Finds the locations of the energy levels
         """
-        outer_height = self.settings.outer_height
-        core_height = self.settings.core_height
         margin = self.settings.margin
 
         nr_a1 = 1
@@ -181,41 +221,26 @@ class MoDia:
         if nr_a2 >= 2 and self.data.fragment2.name != "H":
             print('Number of fragments 2 >= 2, only one set of atomic orbtials is drawn')
 
-        # core scaling
-        if len(core_energies) > 0:
-            emin = min(core_energies)
-            emax = max(core_energies)
-            
-            # prevent collapse for nearly-degenerate cores
-            if abs(emax - emin) < 1e-6:
-                emax = emin + 1e-6
-        
-        def scale_core(e):
-            return (e - emin) / (emax - emin) * core_height
-
-        # Finding lowest outer orbital
-        lwst_mo_o = min(mo_outer)
-        lwst_ao1_o = min(ao1_outer)
-        lwst_ao2_o = min(ao2_outer)
-        lwst_outer = min([lwst_mo_o, lwst_ao1_o, lwst_ao2_o])
+        if core_energies:
+            scale_core = self.__core_scaler(core_energies)
+        else:
+            scale_core = lambda e: 0
+        lwst_outer = self.__outer_reference([mo_outer, ao1_outer, ao2_outer])
 
         # Finding locations of outer levels
-        height_0_outer = outer_height + margin
-        height_0_core = (core_height + outer_height + 2 * margin)
+        height_0_outer = self.settings.outer_height + margin
+        height_0_core = (self.settings.core_height + self.settings.outer_height
+                         + 2 * margin)
 
         # reordering (ro) and scaling (s) orbital levels
         # Molecular orbitals
-        ro_mo_outer = [x+abs(lwst_outer) for x in mo_outer]
-        s_mo_outer = [x/(max(ro_mo_outer)) * outer_height for x in ro_mo_outer]
-        s_mo_core  = [scale_core(e) for e in mo_core]
+        s_mo_outer = self.__scale_outer(mo_outer, lwst_outer)
+        s_mo_core = [scale_core(e) for e in mo_core]
 
         # Atomic orbitals
         # ---------------
         # Atomic orbital 1
-        ro_ao1_outer = [x+abs(lwst_outer) for x in ao1_outer]
-        s_ao1_outer = [x/(max(ro_mo_outer)) * outer_height for x in
-                       ro_ao1_outer]
-                       
+        s_ao1_outer = self.__scale_outer(ao1_outer, lwst_outer)
         s_ao1_core = [scale_core(e) for e in ao1_core]
 
         if nr_a1 > 1:
@@ -223,10 +248,7 @@ class MoDia:
             s_ao1_outer = s_ao1_outer*nr_a1
 
         # Atomic orbital 2
-        ro_ao2_outer = [x+abs(lwst_outer) for x in ao2_outer]
-        s_ao2_outer = [x/(max(ro_mo_outer)) * outer_height for x in
-                       ro_ao2_outer]
-                       
+        s_ao2_outer = self.__scale_outer(ao2_outer, lwst_outer)
         s_ao2_core = [scale_core(e) for e in ao2_core]
 
         if nr_a2 > 1:
@@ -267,7 +289,7 @@ class MoDia:
         width = self.settings.width
         level_width = self.settings.level_width
         margin = self.settings.margin
-        multiplicty_offset = self.settings.multiplicty_offset
+        multiplicity_offset = self.settings.multiplicity_offset
 
         nr_a1 = 1
         nr_a2 = 1
@@ -288,11 +310,14 @@ class MoDia:
 
         # Solving the overlapping multiplicity
         # (only doing it for the outer levels)
-        unique_used = []
-        unique_levels = [x for x in orbe_heights if x not in unique_used and
-                         (unique_used.append(x) or True)]
+        unique_levels = []
+        for height in orbe_heights:
+            if height not in unique_levels:
+                unique_levels.append(height)
+
         occurance = []
-        [occurance.append(orbe_heights.count(x)) for x in unique_levels]
+        for height in unique_levels:
+            occurance.append(orbe_heights.count(height))
 
         i = 0
         orbe_multiplicity_heights = [0]*len(orbe_heights)
@@ -309,51 +334,51 @@ class MoDia:
                 i = i+1
             elif o == 2:
                 orbe_multiplicity_heights[i] = orbe_heights[i] - \
-                    0.5*multiplicty_offset
+                    0.5*multiplicity_offset
                 orbe_multiplicity_heights[i+1] = orbe_heights[i] + \
-                    0.5*multiplicty_offset
+                    0.5*multiplicity_offset
                 i = i+2
             elif o == 3:
                 orbe_multiplicity_heights[i] = orbe_heights[i] - \
-                    multiplicty_offset
+                    multiplicity_offset
                 orbe_multiplicity_heights[i+1] = orbe_heights[i]
                 orbe_multiplicity_heights[i+2] = orbe_heights[i] + \
-                    multiplicty_offset
+                    multiplicity_offset
                 i = i+3
             elif o == 4:
                 orbe_multiplicity_heights[i] = orbe_heights[i] - \
-                    1.5*multiplicty_offset
+                    1.5*multiplicity_offset
                 orbe_multiplicity_heights[i+1] = orbe_heights[i] - \
-                    0.5*multiplicty_offset
+                    0.5*multiplicity_offset
                 orbe_multiplicity_heights[i+2] = orbe_heights[i] + \
-                    0.5*multiplicty_offset
+                    0.5*multiplicity_offset
                 orbe_multiplicity_heights[i+3] = orbe_heights[i] + \
-                    1.5*multiplicty_offset
+                    1.5*multiplicity_offset
                 i = i+4
             elif o == 5:
                 orbe_multiplicity_heights[i] = orbe_heights[i] - \
-                    2*multiplicty_offset
+                    2*multiplicity_offset
                 orbe_multiplicity_heights[i+1] = orbe_heights[i] - \
-                    multiplicty_offset
+                    multiplicity_offset
                 orbe_multiplicity_heights[i+2] = orbe_heights[i]
                 orbe_multiplicity_heights[i+3] = orbe_heights[i] + \
-                    multiplicty_offset
+                    multiplicity_offset
                 orbe_multiplicity_heights[i+4] = orbe_heights[i] + \
-                    2*multiplicty_offset
+                    2*multiplicity_offset
                 i = i+5
             elif o == 6:
                 orbe_multiplicity_heights[i] = orbe_heights[i] - \
-                    2.5*multiplicty_offset
+                    2.5*multiplicity_offset
                 orbe_multiplicity_heights[i+1] = orbe_heights[i] - \
-                    1.5*multiplicty_offset
+                    1.5*multiplicity_offset
                 orbe_multiplicity_heights[i+2] = orbe_heights[i] - \
-                    0.5*multiplicty_offset
+                    0.5*multiplicity_offset
                 orbe_multiplicity_heights[i+3] = orbe_heights[i] + \
-                    0.5*multiplicty_offset
+                    0.5*multiplicity_offset
                 orbe_multiplicity_heights[i+4] = orbe_heights[i] + \
-                    1.5*multiplicty_offset
+                    1.5*multiplicity_offset
                 orbe_multiplicity_heights[i+5] = orbe_heights[i] + \
-                    2.5*multiplicty_offset
+                    2.5*multiplicity_offset
                 i = i+6
             elif o > 6:
                 # print('Multiplicity > 6 not supported, one level drawn')
@@ -372,14 +397,18 @@ class MoDia:
         """
         Appends location dictonary
         """
-        [loct_dict['xb'].append(xb) for xb in orbe_x_start]
-        [loct_dict['xe'].append(xe) for xe in orbe_x_end]
-        [loct_dict['yb'].append(yb) for yb in orbe_heights]
-        [loct_dict['ye'].append(ye) for ye in orbe_heights]
-        [loct_dict['ymb'].append(ymb)
-         for ymb in orbe_multiplicity_heights]
-        [loct_dict['yme'].append(yme)
-         for yme in orbe_multiplicity_heights]
+        for xb in orbe_x_start:
+            loct_dict['xb'].append(xb)
+        for xe in orbe_x_end:
+            loct_dict['xe'].append(xe)
+        for yb in orbe_heights:
+            loct_dict['yb'].append(yb)
+        for ye in orbe_heights:
+            loct_dict['ye'].append(ye)
+        for ymb in orbe_multiplicity_heights:
+            loct_dict['ymb'].append(ymb)
+        for yme in orbe_multiplicity_heights:
+            loct_dict['yme'].append(yme)
 
         return loct_dict
 
@@ -550,7 +579,7 @@ class MoDia:
         width = self.settings.width
         margin = self.settings.margin
         level_width = self.settings.level_width
-        multiplicty_offset = self.settings.multiplicty_offset
+        multiplicity_offset = self.settings.multiplicity_offset
 
         # making arrow
         arrow_color = self.settings.arrow_color
@@ -575,7 +604,7 @@ class MoDia:
 
             if ((ao1_loc['ye'][e] == ao1_loc['yme'][e]) or
                 (ao1_loc['ye'][e] ==
-                 (ao1_loc['yme'][e]-0.5*multiplicty_offset))):
+                 (ao1_loc['yme'][e]-0.5*multiplicity_offset))):
                 if ao1_e_count >= 2*nr_levels:
                     nr_e = 2*nr_levels
                 else:
@@ -594,7 +623,7 @@ class MoDia:
 
             if ((ao2_loc['ye'][e] == ao2_loc['yme'][e]) or
                 (ao2_loc['ye'][e] ==
-                 (ao2_loc['yme'][e]-0.5*multiplicty_offset))):
+                 (ao2_loc['yme'][e]-0.5*multiplicity_offset))):
                 if ao2_e_count >= 2*nr_levels:
                     nr_e = 2*nr_levels
                 else:
@@ -608,7 +637,7 @@ class MoDia:
         for e in range(len(mo_loc['ye'])):
             nr_levels = mo_loc['ye'].count(mo_loc['ye'][e])
             if ((mo_loc['ye'][e] == mo_loc['yme'][e]) or
-                (mo_loc['ye'][e] == (mo_loc['yme'][e]-0.5*multiplicty_offset))):
+                (mo_loc['ye'][e] == (mo_loc['yme'][e]-0.5*multiplicity_offset))):
 
                 # determine how many electrons need to be placed
                 if mo_e_count >= 2*nr_levels:
@@ -881,8 +910,8 @@ class MoDia:
         labels = self.settings.energy_scale_labels
 
         moe = self.data.moe_labels
-        aoe1 = self.data.fragment1.nelec
-        aoe2 = self.data.fragment2.nelec
+        aoe1 = self._fragment1_energies
+        aoe2 = self._fragment2_energies
         nr_a1 = 1
         nr_a2 = 1
 

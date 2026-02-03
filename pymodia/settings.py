@@ -1,4 +1,21 @@
+import ast
 import os
+from typing import Set
+
+
+def load_allowed_settings() -> Set[str]:
+    """
+    Load the set of permitted settings keys from ``allowed_settings.txt``.
+
+    The settings file stores a Python literal containing a set of strings.
+    Keeping this parsing logic here makes the behavior easy to find and easy
+    to teach when using PyMoDia as an educational example.
+    """
+    settings_path = os.path.join(os.path.dirname(__file__),
+                                 'allowed_settings.txt')
+    with open(settings_path, "r") as allowed_settings_file:
+        raw_settings = allowed_settings_file.read()
+    return set(ast.literal_eval(raw_settings))
 
 
 class MoDiaSettings():
@@ -8,10 +25,7 @@ class MoDiaSettings():
 
     def __init__(self, **kwargs):
 
-        allowed_settings_file = open(os.path.join(os.path.dirname(__file__),
-                                                  'allowed_settings.txt'), "r")
-        allowed_settings = allowed_settings_file.read()
-        allowed_settings_file.close()
+        allowed_settings = load_allowed_settings()
 
         self.ao1_color = ['#000000']
         self.ao1_labels = ['1s', '2s',
@@ -50,7 +64,7 @@ class MoDiaSettings():
         self.mo_color = ['#000000']
         self.mo_labels = None
         self.mo_round = 3
-        self.multiplicty_offset = 3
+        self.multiplicity_offset = 3
         self.name_color = '#000000'
         self.orbc_color = '#000000'
         self.orbc_cutoff = 0.4
