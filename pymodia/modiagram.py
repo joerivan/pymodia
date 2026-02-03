@@ -221,7 +221,10 @@ class MoDia:
         if nr_a2 >= 2 and self.data.fragment2.name != "H":
             print('Number of fragments 2 >= 2, only one set of atomic orbtials is drawn')
 
-        scale_core = self.__core_scaler(core_energies)
+        if core_energies:
+            scale_core = self.__core_scaler(core_energies)
+        else:
+            scale_core = lambda e: 0
         lwst_outer = self.__outer_reference([mo_outer, ao1_outer, ao2_outer])
 
         # Finding locations of outer levels
